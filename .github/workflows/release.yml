@@ -67,6 +67,13 @@ jobs:
           if [ -n "$failed" ]; then
             echo "::warning::Versions with no builds left on the CDN:$failed"
           fi
+          # Backfills create older releases last, stealing GitHub's "latest" flag
+          # from the newest version; re-mark the highest one
+          if [ -n "$released" ]; then
+            highest=$(gh release list --repo "$GITHUB_REPOSITORY" --json tagName --jq '.[].tagName' | sed 's/^v//' | sort -V | tail -n1)
+            gh release edit "v$highest" --repo "$GITHUB_REPOSITORY" --latest >/dev/null
+            echo "Marked v$highest as latest"
+          fi
 
       - name: Set last release and run timestamps
         id: set-timestamps
