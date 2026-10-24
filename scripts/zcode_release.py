@@ -55,6 +55,8 @@ ARCHES = [
 
 DOWNLOAD_ATTEMPTS = 5
 TIMEOUT = 60
+PROGRESS_INTERVAL = 15
+MIN_WINDOW_BYTES = 1024 * 1024  # abort + retry below ~70KB/s
 
 
 def fetch_text(url: str) -> str:
@@ -78,8 +80,30 @@ def fetch_file(url: str, dest: Path) -> None:
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                window_start = time.monotonic()
+                window_bytes = 0
                 with dest.open("wb") as f:
-                    shutil.copyfileobj(resp, f)
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        done += len(chunk)
+                        window_bytes += len(chunk)
+                        elapsed = time.monotonic() - window_start
+                        if elapsed >= PROGRESS_INTERVAL:
+                            if window_bytes < MIN_WINDOW_BYTES:
+                                raise OSError(
+                                    f"stalled: {window_bytes} bytes in {elapsed:.0f}s"
+                                )
+                            pct = f" ({done * 100 // total}%)" if total else ""
+                            print(f"  {done // (1024 * 1024)}MB{pct}", flush=True)
+                            window_start = time.monotonic()
+                            window_bytes = 0
+                if total and done != total:
+                    raise OSError(f"truncated: got {done} of {total} bytes")
             return
         except (urllib.error.URLError, OSError) as exc:
             last = exc
