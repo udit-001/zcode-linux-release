@@ -10,16 +10,11 @@
   <span> </span>
 </p>
 
-**The latest ZCode for Linux, mirrored to GitHub releases daily — checksum-verified, with English release notes and download URLs that never change.**
+**The latest ZCode for Linux, mirrored to GitHub releases daily — checksum-verified, stable download URLs.**
 
 ## Get ZCode
 
-Download the AppImage for your architecture from the [latest release](https://github.com/udit-001/zcode-linux-release/releases/latest):
-
-- **x86_64** — `ZCode-*-x86_64.AppImage`
-- **ARM64** — `ZCode-*-aarch64.AppImage`
-
-Every release ships a `SHA512SUMS` file. Verify your download:
+Download the AppImage for your architecture from the [latest release](https://github.com/udit-001/zcode-linux-release/releases/latest) — `ZCode-*-x86_64.AppImage` or `ZCode-*-aarch64.AppImage` — and verify with the attached `SHA512SUMS`:
 
 ```
 sha512sum -c SHA512SUMS
@@ -34,17 +29,11 @@ sha512sum -c SHA512SUMS
 
 Leave **Allow pre-releases** off unless you want in-progress builds.
 
-## Why this repo exists
+## How it works
 
-ZCode publishes its Linux builds on a per-version CDN path — there is no fixed download URL and no API that answers "what's the latest?". [Cursor](https://github.com/udit-001/cursor-linux-release) had the same problem minus an API, so this repo borrows its approach:
+Z.ai serves Linux builds on per-version CDN paths — no fixed URL, no "latest" API. A daily action grabs the newest version from the [download page](https://zcode.z.ai/en#all-downloads), verifies each AppImage against the sha512 checksums in Z.ai's own electron-updater metadata, and publishes a release with the English changelog.
 
-- **Detects** the newest version listed on the [download page](https://zcode.z.ai/en#all-downloads), daily
-- **Downloads** every available AppImage (x64/arm64) and verifies it against the sha512 checksums ZCode publishes in its electron-updater metadata (`latest.yml`) — a mismatch fails the build. Versions the CDN no longer hosts are skipped.
-- **Publishes** a GitHub release with the English changelog (from `latest.yml`'s `releaseNotesByLocale`) and a `SHA512SUMS` file
-
-## Hacking
-
-`scripts/zcode_release.py` holds all the ZCode-specific logic; the workflow is a thin wrapper around it. To test locally (Python 3 with PyYAML, plus curl):
+Logic lives in `scripts/zcode_release.py`; test locally with Python 3 + PyYAML:
 
 ```
 python3 scripts/zcode_release.py latest
