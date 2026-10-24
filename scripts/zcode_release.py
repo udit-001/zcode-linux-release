@@ -30,7 +30,6 @@ import argparse
 import base64
 import hashlib
 import re
-import shutil
 import sys
 import tempfile
 import time
@@ -147,7 +146,7 @@ def extract_notes(meta, version: str) -> str:
     locale = ((meta or {}).get("releaseNotesByLocale") or {}).get("en-US") or {}
     notes = (locale.get("markdown") or "").strip()
     if not notes:
-        notes = (meta.get("releaseNotes") or "").strip()
+        notes = ((meta or {}).get("releaseNotes") or "").strip()
     if not notes:
         notes = f"Automated release of ZCode {version} for Linux x64 and aarch64."
     header = f"Automated release of [ZCode {version}]({CHANGELOG_URL}) for Linux x64 and aarch64."
@@ -188,7 +187,6 @@ def prepare_arch(version: str, platform: str, arch: str, out_dir: Path, tmp: Pat
 
 
 def prepare(version: str, out_dir: Path) -> None:
-    metas = {}
     sums = []
     notes_meta = None
 
@@ -199,8 +197,7 @@ def prepare(version: str, out_dir: Path) -> None:
         for result in results:
             if result is None:
                 continue
-            arch, meta, asset, sha = result
-            metas[arch] = meta
+            _, meta, asset, sha = result
             sums.append(f"{sha}  {asset.name}")
             if notes_meta is None:
                 notes_meta = meta
@@ -234,7 +231,7 @@ def main() -> int:
                 parser.error(f"Invalid version: {version!r}")
             args.out_dir.mkdir(parents=True, exist_ok=True)
             prepare(version, args.out_dir)
-    except (subprocess.CalledProcessError, RuntimeError, StopIteration) as exc:
+    except (urllib.error.URLError, RuntimeError, StopIteration) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
