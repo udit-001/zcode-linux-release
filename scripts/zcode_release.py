@@ -5,8 +5,13 @@ Everything ZCode-release specific lives here: where versions are listed,
 where builds live on the CDN, and how electron-updater metadata is read.
 Callers (the workflow, humans) never need to know any of that.
 
+Seam contract: this module owns the ZCode side only. GitHub-side concerns
+(release existence, tags, uploading assets) belong to the caller.
+
 Subcommands:
   latest            Print the latest ZCode version from the download page.
+  versions          Print every ZCode version from the download page,
+                    one per line, oldest first.
   prepare VERSION   Download the x64 + arm64 AppImages for VERSION, verify
                     them against the published sha512 checksums, and write
                     release assets into --out-dir (default: cwd):
@@ -27,6 +32,7 @@ import hashlib
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -61,11 +67,15 @@ def version_key(version: str) -> tuple:
     return tuple(int(part) for part in version.split("."))
 
 
-def latest_version() -> str:
+def all_versions() -> list:
     versions = sorted(set(VERSION_RE.findall(fetch_text(DOWNLOAD_PAGE))), key=version_key)
     if not versions:
         raise RuntimeError(f"No versions found on {DOWNLOAD_PAGE}")
-    return versions[-1]
+    return versions
+
+
+def latest_version() -> str:
+    return all_versions()[-1]
 
 
 def appimage_entry(meta: dict) -> dict:
@@ -97,33 +107,34 @@ def prepare(version: str, out_dir: Path) -> None:
     metas = {}
     sums = []
 
-    for platform, arch in ARCHES:
-        yml_path = out_dir / f"latest-{platform}.yml"
-        fetch_file(
-            CDN_URL.format(version=version, platform=platform, filename="latest.yml"),
-            yml_path,
-        )
-        with yml_path.open() as f:
-            metas[arch] = yaml.safe_load(f)
-
-        asset = out_dir / f"ZCode-{version}-{arch}.AppImage"
-        fetch_file(
-            CDN_URL.format(
-                version=version,
-                platform=platform,
-                filename=f"ZCode-{version}-{platform}.AppImage",
-            ),
-            asset,
-        )
-
-        expected = base64.b64decode(appimage_entry(metas[arch])["sha512"]).hex()
-        actual = sha512_hex(asset)
-        if actual != expected:
-            raise RuntimeError(
-                f"Checksum mismatch for {asset.name}: expected {expected}, got {actual}"
+    with tempfile.TemporaryDirectory() as tmp:
+        for platform, arch in ARCHES:
+            yml_path = Path(tmp) / f"latest-{platform}.yml"
+            fetch_file(
+                CDN_URL.format(version=version, platform=platform, filename="latest.yml"),
+                yml_path,
             )
-        print(f"Checksum OK: {asset.name}", flush=True)
-        sums.append(f"{actual}  {asset.name}")
+            with yml_path.open() as f:
+                metas[arch] = yaml.safe_load(f)
+
+            asset = out_dir / f"ZCode-{version}-{arch}.AppImage"
+            fetch_file(
+                CDN_URL.format(
+                    version=version,
+                    platform=platform,
+                    filename=f"ZCode-{version}-{platform}.AppImage",
+                ),
+                asset,
+            )
+
+            expected = base64.b64decode(appimage_entry(metas[arch])["sha512"]).hex()
+            actual = sha512_hex(asset)
+            if actual != expected:
+                raise RuntimeError(
+                    f"Checksum mismatch for {asset.name}: expected {expected}, got {actual}"
+                )
+            print(f"Checksum OK: {asset.name}", flush=True)
+            sums.append(f"{actual}  {asset.name}")
 
     (out_dir / "SHA512SUMS").write_text("\n".join(sums) + "\n")
     (out_dir / "release-notes.md").write_text(extract_notes(metas["x86_64"], version))
@@ -134,6 +145,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("latest", help="Print the latest ZCode version")
+    sub.add_parser("versions", help="Print all known ZCode versions, oldest first")
     prepare_parser = sub.add_parser("prepare", help="Download and verify release assets")
     prepare_parser.add_argument("version", help="ZCode version, e.g. 3.16.3 (v prefix allowed)")
     prepare_parser.add_argument("--out-dir", type=Path, default=Path.cwd(), help="Output directory (default: cwd)")
@@ -142,6 +154,8 @@ def main() -> int:
     try:
         if args.command == "latest":
             print(latest_version())
+        elif args.command == "versions":
+            print("\n".join(all_versions()))
         else:
             version = args.version.lstrip("v")
             if not re.fullmatch(r"\d+\.\d+\.\d+", version):

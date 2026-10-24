@@ -2,6 +2,11 @@ name: ZCode Release
 
 on:
   workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Versions to release (space-separated, e.g. "3.15.1 3.16.2"). "all" = every version missing a release. Empty = latest only.'
+        required: false
+        default: ''
   schedule:
     - cron: '30 0 * * *'
 
@@ -10,53 +15,54 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Fetch latest ZCode version
-        id: fetch-zcode
+      - name: Resolve target versions
+        id: resolve
         run: |
-          version=$(python3 scripts/zcode_release.py latest)
-          echo "Latest ZCode version: $version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Check if version already exists
-        id: check-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view "v${{ steps.fetch-zcode.outputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release already exists. Skipping."
+          input="${{ inputs.versions }}"
+          if [ "$input" = "all" ]; then
+            targets=$(python3 scripts/zcode_release.py versions)
+          elif [ -n "$input" ]; then
+            targets="$input"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            targets=$(python3 scripts/zcode_release.py latest)
           fi
+          echo "Target versions: $targets"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare release assets
-        if: steps.check-release.outputs.exists == 'false'
-        env:
-          VERSION: ${{ steps.fetch-zcode.outputs.version }}
-        run: python3 scripts/zcode_release.py prepare "$VERSION"
-
-      - name: Create GitHub Release
-        if: steps.check-release.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ steps.fetch-zcode.outputs.version }}
-          name: ZCode ${{ steps.fetch-zcode.outputs.version }}
-          body_path: release-notes.md
-          files: |
-            ZCode-${{ steps.fetch-zcode.outputs.version }}-x86_64.AppImage
-            ZCode-${{ steps.fetch-zcode.outputs.version }}-aarch64.AppImage
-            SHA512SUMS
+      - name: Release missing versions
+        run: |
+          released=""
+          for version in ${{ steps.resolve.outputs.targets }}; do
+            if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "v$version already released, skipping"
+              continue
+            fi
+            python3 scripts/zcode_release.py prepare "$version"
+            gh release create "v$version" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ZCode $version" \
+              --notes-file release-notes.md \
+              "ZCode-$version-x86_64.AppImage" \
+              "ZCode-$version-aarch64.AppImage" \
+              SHA512SUMS
+            echo "Released v$version"
+            released="$released $version"
+            rm -f ZCode-*.AppImage SHA512SUMS release-notes.md
+          done
+          echo "released=$released" >> "$GITHUB_ENV"
 
       - name: Set last release and run timestamps
         id: set-timestamps
         run: |
           current_timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
-          if [[ "${{ steps.check-release.outputs.exists }}" == "false" ]]; then
+          if [ -n "${{ env.released }}" ]; then
             release_timestamp=$current_timestamp
           else
             release_timestamp=$(grep -oP '(?<=\*\*⏳ Last Released On\*\*: ).*' README.md)
