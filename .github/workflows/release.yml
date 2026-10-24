@@ -1,0 +1,87 @@
+name: ZCode Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 0 * * *'
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch latest ZCode version
+        id: fetch-zcode
+        run: |
+          version=$(python3 scripts/zcode_release.py latest)
+          echo "Latest ZCode version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already exists
+        id: check-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.fetch-zcode.outputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release already exists. Skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare release assets
+        if: steps.check-release.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.fetch-zcode.outputs.version }}
+        run: python3 scripts/zcode_release.py prepare "$VERSION"
+
+      - name: Create GitHub Release
+        if: steps.check-release.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.fetch-zcode.outputs.version }}
+          name: ZCode ${{ steps.fetch-zcode.outputs.version }}
+          body_path: release-notes.md
+          files: |
+            ZCode-${{ steps.fetch-zcode.outputs.version }}-x86_64.AppImage
+            ZCode-${{ steps.fetch-zcode.outputs.version }}-aarch64.AppImage
+            SHA512SUMS
+
+      - name: Set last release and run timestamps
+        id: set-timestamps
+        run: |
+          current_timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          if [[ "${{ steps.check-release.outputs.exists }}" == "false" ]]; then
+            release_timestamp=$current_timestamp
+          else
+            release_timestamp=$(grep -oP '(?<=\*\*⏳ Last Released On\*\*: ).*' README.md)
+          fi
+
+          echo "last_run=$current_timestamp" >> "$GITHUB_ENV"
+          echo "last_release=$release_timestamp" >> "$GITHUB_ENV"
+
+      - name: Update README with timestamps
+        run: |
+          sed -i '/^## 📅 Release Status/,/^$/d' README.md
+
+          echo -e "## 📅 Release Status" >> README.md
+          echo -e "- **⏳ Last Released On**: ${{ env.last_release }}" >> README.md
+          echo -e "- **🔄 Last Run**: ${{ env.last_run }}" >> README.md
+
+      - name: Commit and push README update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "README unchanged, skipping commit."
+          else
+            git add README.md
+            git commit -m "📝 Update timestamps in README [workflow]"
+            git push
+          fi
