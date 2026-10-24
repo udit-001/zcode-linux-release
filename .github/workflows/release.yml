@@ -38,24 +38,32 @@ jobs:
       - name: Release missing versions
         run: |
           released=""
+          failed=""
           for version in ${{ steps.resolve.outputs.targets }}; do
             if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "v$version already released, skipping"
               continue
             fi
-            python3 scripts/zcode_release.py prepare "$version"
+            if ! python3 scripts/zcode_release.py prepare "$version"; then
+              echo "::warning::No builds available for v$version, skipping"
+              failed="$failed $version"
+              rm -f ZCode-*.AppImage SHA512SUMS release-notes.md
+              continue
+            fi
             gh release create "v$version" \
               --repo "$GITHUB_REPOSITORY" \
               --title "ZCode $version" \
               --notes-file release-notes.md \
-              "ZCode-$version-x86_64.AppImage" \
-              "ZCode-$version-aarch64.AppImage" \
-              SHA512SUMS
+              ZCode-*.AppImage SHA512SUMS
             echo "Released v$version"
             released="$released $version"
             rm -f ZCode-*.AppImage SHA512SUMS release-notes.md
           done
           echo "released=$released" >> "$GITHUB_ENV"
+          echo "failed=$failed" >> "$GITHUB_ENV"
+          if [ -n "$failed" ]; then
+            echo "::warning::Versions with no builds left on the CDN:$failed"
+          fi
 
       - name: Set last release and run timestamps
         id: set-timestamps

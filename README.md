@@ -44,7 +44,7 @@ Point [Gear Lever](https://github.com/mijorus/gearlever) at a stable URL and it 
 ZCode publishes its Linux builds on a per-version CDN path — there is no fixed download URL and no API that answers "what's the latest?". [Cursor](https://github.com/udit-001/cursor-linux-release) had the same problem minus an API, so this repo borrows its approach:
 
 - **Detects** the newest version listed on the [download page](https://zcode.z.ai/en#all-downloads), daily
-- **Downloads** both AppImages and verifies them against the sha512 checksums ZCode publishes in its electron-updater metadata (`latest.yml`) — a mismatch fails the build
+- **Downloads** every available AppImage (x64/arm64) and verifies it against the sha512 checksums ZCode publishes in its electron-updater metadata (`latest.yml`) — a mismatch fails the build. Versions the CDN no longer hosts are skipped.
 - **Publishes** a GitHub release with the English changelog (from `latest.yml`'s `releaseNotesByLocale`) and a `SHA512SUMS` file
 
 ## Hacking

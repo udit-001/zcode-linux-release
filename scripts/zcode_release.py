@@ -12,7 +12,7 @@ Subcommands:
   latest            Print the latest ZCode version from the download page.
   versions          Print every ZCode version from the download page,
                     one per line, oldest first.
-  prepare VERSION   Download the x64 + arm64 AppImages for VERSION, verify
+  prepare VERSION   Download the available x64/arm64 AppImages for VERSION, verify
                     them against the published sha512 checksums, and write
                     release assets into --out-dir (default: cwd):
                       ZCode-<version>-x86_64.AppImage
@@ -23,16 +23,20 @@ Subcommands:
 
 Exit codes: 0 success, 1 operational failure, 2 usage error.
 
-Requires Python 3 with PyYAML (preinstalled on GitHub-hosted runners) and curl.
+Requires Python 3 with PyYAML (preinstalled on GitHub-hosted runners).
 """
 
 import argparse
 import base64
 import hashlib
 import re
-import subprocess
+import shutil
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -49,18 +53,41 @@ ARCHES = [
 ]
 
 
+DOWNLOAD_ATTEMPTS = 5
+TIMEOUT = 60
+
+
 def fetch_text(url: str) -> str:
-    return subprocess.run(
-        ["curl", "-fsSL", url], check=True, capture_output=True, text=True
-    ).stdout
+    with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+        return resp.read().decode()
+
+
+def exists(url: str) -> bool:
+    """Availability probe via a 1-byte ranged GET (HEAD is unreliable on this CDN)."""
+    req = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return resp.status in (200, 206, 416)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+        return False
 
 
 def fetch_file(url: str, dest: Path) -> None:
     print(f"Downloading {url}", flush=True)
-    subprocess.run(
-        ["curl", "-fsSL", "--retry", "3", "--retry-delay", "5", "-o", str(dest), url],
-        check=True,
-    )
+    last = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+                with dest.open("wb") as f:
+                    shutil.copyfileobj(resp, f)
+            return
+        except (urllib.error.URLError, OSError) as exc:
+            last = exc
+            dest.unlink(missing_ok=True)
+            if attempt < DOWNLOAD_ATTEMPTS:
+                print(f"  retry {attempt + 1}/{DOWNLOAD_ATTEMPTS} ({exc})", flush=True)
+                time.sleep(5 * attempt)
+    raise RuntimeError(f"download failed after {DOWNLOAD_ATTEMPTS} attempts: {url} ({last})")
 
 
 def version_key(version: str) -> tuple:
@@ -91,9 +118,9 @@ def sha512_hex(path: Path) -> str:
     return digest.hexdigest()
 
 
-def extract_notes(meta: dict, version: str) -> str:
+def extract_notes(meta, version: str) -> str:
     """English release notes from latest.yml, with fallbacks."""
-    locale = (meta.get("releaseNotesByLocale") or {}).get("en-US") or {}
+    locale = ((meta or {}).get("releaseNotesByLocale") or {}).get("en-US") or {}
     notes = (locale.get("markdown") or "").strip()
     if not notes:
         notes = (meta.get("releaseNotes") or "").strip()
@@ -103,41 +130,62 @@ def extract_notes(meta: dict, version: str) -> str:
     return f"{header}\n\n{notes}\n"
 
 
+def prepare_arch(version: str, platform: str, arch: str, out_dir: Path, tmp: Path):
+    """Download and verify one arch. Returns (arch, meta, asset, hexdigest) or None."""
+    if not exists(CDN_URL.format(version=version, platform=platform, filename="latest.yml")):
+        print(f"No {platform} build for {version}, skipping {arch}", flush=True)
+        return None
+
+    yml_path = tmp / f"latest-{platform}.yml"
+    asset = out_dir / f"ZCode-{version}-{arch}.AppImage"
+    fetch_file(
+        CDN_URL.format(version=version, platform=platform, filename="latest.yml"),
+        yml_path,
+    )
+    fetch_file(
+        CDN_URL.format(
+            version=version,
+            platform=platform,
+            filename=f"ZCode-{version}-{platform}.AppImage",
+        ),
+        asset,
+    )
+
+    with yml_path.open() as f:
+        meta = yaml.safe_load(f)
+    expected = base64.b64decode(appimage_entry(meta)["sha512"]).hex()
+    actual = sha512_hex(asset)
+    if actual != expected:
+        raise RuntimeError(
+            f"Checksum mismatch for {asset.name}: expected {expected}, got {actual}"
+        )
+    print(f"Checksum OK: {asset.name}", flush=True)
+    return arch, meta, asset, actual
+
+
 def prepare(version: str, out_dir: Path) -> None:
     metas = {}
     sums = []
+    notes_meta = None
 
-    with tempfile.TemporaryDirectory() as tmp:
-        for platform, arch in ARCHES:
-            yml_path = Path(tmp) / f"latest-{platform}.yml"
-            fetch_file(
-                CDN_URL.format(version=version, platform=platform, filename="latest.yml"),
-                yml_path,
-            )
-            with yml_path.open() as f:
-                metas[arch] = yaml.safe_load(f)
+    with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(max_workers=2) as pool:
+        results = pool.map(
+            lambda pa: prepare_arch(version, pa[0], pa[1], out_dir, Path(tmp)), ARCHES
+        )
+        for result in results:
+            if result is None:
+                continue
+            arch, meta, asset, sha = result
+            metas[arch] = meta
+            sums.append(f"{sha}  {asset.name}")
+            if notes_meta is None:
+                notes_meta = meta
 
-            asset = out_dir / f"ZCode-{version}-{arch}.AppImage"
-            fetch_file(
-                CDN_URL.format(
-                    version=version,
-                    platform=platform,
-                    filename=f"ZCode-{version}-{platform}.AppImage",
-                ),
-                asset,
-            )
-
-            expected = base64.b64decode(appimage_entry(metas[arch])["sha512"]).hex()
-            actual = sha512_hex(asset)
-            if actual != expected:
-                raise RuntimeError(
-                    f"Checksum mismatch for {asset.name}: expected {expected}, got {actual}"
-                )
-            print(f"Checksum OK: {asset.name}", flush=True)
-            sums.append(f"{actual}  {asset.name}")
+    if not metas:
+        raise RuntimeError(f"No builds available for {version}")
 
     (out_dir / "SHA512SUMS").write_text("\n".join(sums) + "\n")
-    (out_dir / "release-notes.md").write_text(extract_notes(metas["x86_64"], version))
+    (out_dir / "release-notes.md").write_text(extract_notes(notes_meta, version))
     print("Release assets ready.", flush=True)
 
 
