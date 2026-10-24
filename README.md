@@ -27,17 +27,12 @@ sha512sum -c SHA512SUMS
 
 ## Auto-update with Gear Lever
 
-Point [Gear Lever](https://github.com/mijorus/gearlever) at a stable URL and it picks up each new release automatically. Configure the update URL for your architecture ([guide](https://mijorus.it/posts/gearlever/update-url-info/)):
+[Gear Lever](https://github.com/mijorus/gearlever) picks up each new release automatically. In its **Update management** screen, set the source to **Github** and fill in:
 
-- **x86_64**
-  ```
-  https://github.com/udit-001/zcode-linux-release/releases/download/*/ZCode-*-x86_64.AppImage
-  ```
+- **Username/Repo** — `udit-001/zcode-linux-release`
+- **Release file name** — `ZCode-*-x86_64.AppImage` (or `ZCode-*-aarch64.AppImage` on ARM)
 
-- **ARM64**
-  ```
-  https://github.com/udit-001/zcode-linux-release/releases/download/*/ZCode-*-aarch64.AppImage
-  ```
+Leave **Allow pre-releases** off unless you want in-progress builds.
 
 ## Why this repo exists
 

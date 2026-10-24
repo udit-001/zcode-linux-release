@@ -202,7 +202,7 @@ def prepare(version: str, out_dir: Path) -> None:
             if notes_meta is None:
                 notes_meta = meta
 
-    if not metas:
+    if not sums:
         raise RuntimeError(f"No builds available for {version}")
 
     (out_dir / "SHA512SUMS").write_text("\n".join(sums) + "\n")
