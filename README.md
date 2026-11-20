@@ -42,4 +42,4 @@ python3 scripts/zcode_release.py prepare 3.16.3 --out-dir /tmp/zcode
 
 ## 📅 Release Status
 - **⏳ Last Released On**: 2026-11-14 06:50:58 UTC
-- **🔄 Last Run**: 2026-11-19 07:44:16 UTC
+- **🔄 Last Run**: 2026-11-20 07:36:01 UTC
